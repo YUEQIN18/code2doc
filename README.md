@@ -1,14 +1,18 @@
-# AI 软件说明文档生成
+# AI生成接口文档
 
-> 通过阅读代码，自动生成文档
-
-- 作者：欧阳鹏
-- 开发日期：2023 年 4 月 20 日
-https://github.com/oyps/code2doc
+> 通过阅读代码，自动生成文档，支持c++，java，javascript等多种语言
 
 ## 使用方法
 
-1. 将 `.env.example` 复制到 `.env`，填写 OpenAI 的 API KEY
+1. 使用 vim 生成一个`.env`，填写 OpenAI 的 API KEY 
+    ```
+    vim .env
+    ```
+    填写
+    ```
+    OPENAI_API_KEY=xxx
+    ```
 2. 将源代码下载到 `code` 文件夹中
-3. 将事先准备的文档大纲，放入 `tasks` 文件中，一行一个任务
-4. 运行 `main.py` 等待文档编写完成
+3. 运行 `main.py` 等待文档编写完成
+
+https://github.com/YUEQIN18/code2doc
