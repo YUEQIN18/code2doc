@@ -1,0 +1,1077 @@
+package com.hj2.modeldriver;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.cloud.openfeign.EnableFeignClients;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import springfox.documentation.swagger2.annotations.EnableSwagger2;
+@SpringBootApplication()
+@ComponentScan(basePackages = {"com.hs","com.hj2.modeldriver"})
+@EnableScheduling
+//@MapperScan("com.hj2.forecast.dao")
+@EnableFeignClients({"com.hj2.generalFeign","com.hj2.forecast.client.api"})
+public class SWMMApplication
+{
+public static void main( String[] args )
+{
+SpringApplication.run(SWMMApplication.class, args);
+}
+}
+package com.hj2.forecast.controller;
+import com.hs.forecast.client.entity.bo.RunProgressBo;
+import com.hs.forecast.jobhandler.AutoRunForecastModelJob;
+import com.hs.forecast.jobhandler.RunRiverJob;
+import org.springframework.web.bind.annotation.*;
+import com.hs.forecast.client.entity.dto.RollModelConfig;
+import com.hs.forecast.service.IRollModelConfigService;
+import com.hs.common.core.util.Result;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import javax.annotation.Resource;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ *前端控制器
+ * </p>
+ *
+ * @author qih
+ * @since 2022-03-11
+ */
+@RestController
+@RequestMapping("/api/roll")
+@Api(tags = "RollModelConfig")
+public class RollModelConfigController {
+//region
+@Resource
+private IRollModelConfigService irollModelConfigService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/rollModelConfig/findAll")
+public Result<List<RollModelConfig>> findAllRollModelConfig(){ return new Result(irollModelConfigService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/rollModelConfig/findById/{id}")
+public Result<RollModelConfig> findRollModelConfigById(@PathVariable Long id){ return new Result(irollModelConfigService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/rollModelConfig/findByIds")
+public Result<Collection<RollModelConfig>> findRollModelConfigByIds(@RequestParam("ids") List<Long> list){ return new Result(irollModelConfigService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/rollModelConfig/add")
+public Result<Integer> addRollModelConfig(@RequestBody RollModelConfig entity){ return new Result(irollModelConfigService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/rollModelConfig/addBatch")
+public Result<Integer> addRollModelConfigBatch(@RequestBody List<RollModelConfig> list){ return new Result(irollModelConfigService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/rollModelConfig/update")
+public Result<Integer> updateRollModelConfig(@RequestBody RollModelConfig entity){ return new Result(irollModelConfigService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/rollModelConfig/updateBatch")
+public Result<Integer> updateRollModelConfigBatch(@RequestBody List<RollModelConfig> list){ return new Result(irollModelConfigService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/rollModelConfig/delete")
+public Result<Integer> deleteRollModelConfig(@RequestBody Long id){ return new Result(irollModelConfigService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/rollModelConfig/deleteBatch")
+public Result<Integer> deleteRollModelConfigBatch(@RequestBody List<Long> list){ return new Result(irollModelConfigService.deleteBatch(list)); }
+@ApiOperation(notes = "获取在线滚动计算配置", value = "获取在线滚动计算配置")
+@GetMapping("/getOnlineRollModelConfig")
+public Result<RollModelConfig> getOnlineRollModelConfig(){
+return new Result(irollModelConfigService.getOnlineRollModelConfig());
+}
+@ApiOperation(notes = "根据类型获取配置", value = "根据类型获取配置")
+@GetMapping("/getRollModelConfigByType")
+public Result<RollModelConfig> getRollModelConfigByType(@RequestParam String type){
+return new Result(irollModelConfigService.getRollModelConfigByType(type));
+}
+//endregion
+@Resource
+private AutoRunForecastModelJob job;
+@ApiOperation(notes = "滚动计算测试", value = "滚动计算测试")
+@GetMapping("/task")
+public void task() {
+job.executeTask();
+}
+@Resource
+private RunRiverJob riverJob;
+@ApiOperation(notes = "新增河道预警模拟", value = "新增河道预警模拟")
+@GetMapping("/riverTask")
+public Result<Boolean> riverTask(String scenarioType) throws InterruptedException {
+riverJob.executeRiverTask(scenarioType);
+return new Result(200,true,"");
+}
+@ApiOperation(notes = "获取模型计算进度", value = "获取模型计算进度")
+@GetMapping("/GetTaskProgress")
+public Result<RunProgressBo> GetTaskProgress(String scenarioType) {
+return new Result(riverJob.GetTaskProgress(scenarioType));
+}
+@ApiOperation(notes = "获取是否有河道模型在计算", value = "获取是否有河道模型在计算")
+@GetMapping("/CheckScenarioRunning")
+public Result<Boolean> CheckScenarioRunning(String scenarioType) {
+return new Result(riverJob.CheckScenarioRunning(scenarioType));
+}
+}
+package com.hj2.modeldriver;
+import cn.hutool.core.util.ObjectUtil;
+import com.alibaba.fastjson.JSONObject;
+import com.hj2.forecast.client.api.ResultHandlerFeign;
+import com.hs.common.core.util.redisson.RedisUtil;
+import com.hj2.entity.dto.Scenario;
+import com.hj2.generalFeign.GeneralFeign;
+import com.hs.model.swmm.service.SWMMModelImpl;
+import com.xxl.job.core.context.XxlJobHelper;
+import com.xxl.job.core.handler.IJobHandler;
+import com.xxl.job.core.handler.annotation.XxlJob;
+import lombok.Data;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Component;
+import javax.annotation.Resource;
+import java.time.LocalDateTime;
+import java.util.Objects;
+import java.util.concurrent.TimeUnit;
+/**
+ * swmm模型计算
+ * @author qih
+ */
+@Component
+@Slf4j
+@EnableAsync
+public class SWMMDriver extends IJobHandler {
+@Resource
+private RedisUtil redisUtil;
+@Autowired
+private GeneralFeign generalFeign;
+@Autowired
+private ResultHandlerFeign resultFeign;
+@XxlJob("ForecastSWMMJob")
+@Override
+public void execute() throws Exception {
+String jobParamStr = XxlJobHelper.getJobParam();
+log.info("接收到参数: {}", jobParamStr);
+JobParma jobParma = JSONObject.parseObject(jobParamStr, JobParma.class);
+if(Objects.isNull(jobParma)){
+throw new RuntimeException("缺少参数对象");
+}
+if(Objects.isNull(jobParma.getRedisKey())){
+throw new RuntimeException("缺少参数 [ redisKey ]");
+}
+if(Objects.isNull(jobParma.getScenarioId())){
+throw new RuntimeException("缺少参数 [ ScenarioId ]");
+}
+//SWMM 模型
+// Long scenarioId = Long.valueOf("1495692181585956866");//Long.parseLong(JSONObject.parseObject(jobParam).getString("scenarioId"));
+Scenario scenario = generalFeign.getFilePathByScenarioId(jobParma.getScenarioId()).getData();
+String modelPath = scenario.getProjectFile();//"C:\\Work\\Workfolder\\Scenario\\TestHJ2\\test.inp";
+// modelPath = "/Users/administrators/workfolder/scenario/YJYCFAMNFA/test.inp";
+log.info("模型文件路径: {}", modelPath);
+SWMMModelImpl model = new SWMMModelImpl(modelPath);
+LocalDateTime st = model.getStartTime();
+//LocalDateTime et = model.getEndTime();
+int stepInterval = model.getReportTimeStepInterval();
+model.runModel(jobParma.redisKey);
+//check success
+ProgressData progress = null;
+if(ObjectUtil.isNotEmpty(redisUtil.getCacheObject(jobParma.redisKey))){
+progress = JSONObject.parseObject(redisUtil.getCacheObject(jobParma.redisKey).toString(),ProgressData.class);
+}
+if(Objects.isNull(progress) || Objects.isNull(progress.hasError)){
+throw new RuntimeException("进度获取失败");
+}
+if(!progress.hasError || "1" != progress.progress){
+//sendRedisMsg(false, progress.msg, "100", jobParma.redisKey);
+log.error("模型计算失败: {}", modelPath);
+throw new RuntimeException("模型计算失败");
+}
+//TODO: 处理结果
+}
+@Data
+public static class JobParma {
+private String redisKey;
+private Long scenarioId;
+}
+@Data
+public static class ProgressData{
+private String msg;
+private Boolean hasError;
+private String progress;
+}
+private void sendRedisMsg(boolean hasError, String msg, String progress, String redisKey){
+ProgressData progressData = new ProgressData();
+progressData.setHasError(hasError);
+progressData.setMsg(msg);
+progressData.setProgress(progress);
+redisUtil.setCacheObject(redisKey, progressData, 2, TimeUnit.HOURS);
+}
+}
+package com.hj2.forecast;
+import com.alibaba.druid.spring.boot.autoconfigure.DruidDataSourceAutoConfigure;
+import org.mybatis.spring.annotation.MapperScan;
+import org.springframework.beans.factory.config.BeanDefinition;
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.boot.autoconfigure.jdbc.DataSourceAutoConfiguration;
+import org.springframework.cloud.openfeign.EnableFeignClients;
+import org.springframework.context.annotation.AnnotationBeanNameGenerator;
+import org.springframework.context.annotation.ComponentScan;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.annotation.EnableScheduling;
+import springfox.documentation.swagger2.annotations.EnableSwagger2;
+@SpringBootApplication(exclude = { DruidDataSourceAutoConfigure.class })
+@ComponentScan(basePackages = {"com.hj2","com.hs"}
+//, nameGenerator = ForecastApplication.SpringBeanNameGenerator.class
+)
+@EnableSwagger2
+@EnableScheduling
+@MapperScan("com.hs.forecast.dao")
+@EnableFeignClients(basePackages = {"com.hj2","com.hs", "com.component"})
+@EnableAsync
+public class ForecastApplication
+{
+//public static class SpringBeanNameGenerator extends AnnotationBeanNameGenerator {
+//@Override
+//protected String buildDefaultBeanName(BeanDefinition definition) {
+//return definition.getBeanClassName();
+//}
+//}
+public static void main( String[] args )
+{
+SpringApplication.run(ForecastApplication.class, args);
+System.out.println("--------------启动成功!");
+}
+}
+package com.hj2.forecast.controller;
+import com.baomidou.mybatisplus.extension.plugins.pagination.Page;
+import com.hs.common.core.util.PageReqBody;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.dto.ScenarioQueueT;
+import com.hs.forecast.client.entity.vo.JobExecutorInfoVo;
+import com.hs.forecast.client.entity.vo.ProgressVo;
+import com.hs.forecast.service.IScenarioQueueTService;
+import com.hs.forecast.service.XxlJobService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import javax.annotation.Resource;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ *执行方案队列前端控制器
+ * </p>
+ *
+ * @author ldd
+ * @since 2022-02-17
+ */
+@RestController
+@Api(tags = "ScenarioQueue")
+@RequestMapping("/api/scenarioQueueT")
+public class ScenarioQueueController {
+//region
+@Resource
+private IScenarioQueueTService iscenarioQueueTService;
+@Resource
+private XxlJobService xxlJobService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/findAll")
+public Result<List<ScenarioQueueT>> findAllScenarioQueueT(){ return new Result(iscenarioQueueTService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/findById/{id}")
+public Result<ScenarioQueueT> findScenarioQueueTById(@PathVariable Long id){ return new Result(iscenarioQueueTService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/findByIds")
+public Result<Collection<ScenarioQueueT>> findScenarioQueueTByIds(@RequestParam("ids") List<Long> list){ return new Result(iscenarioQueueTService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/add")
+public Result<Integer> addScenarioQueueT(@RequestBody ScenarioQueueT entity){ return new Result(iscenarioQueueTService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/addBatch")
+public Result<Integer> addScenarioQueueTBatch(@RequestBody List<ScenarioQueueT> list){ return new Result(iscenarioQueueTService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/update")
+public Result<Integer> updateScenarioQueueT(@RequestBody ScenarioQueueT entity){ return new Result(iscenarioQueueTService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/updateBatch")
+public Result<Integer> updateScenarioQueueTBatch(@RequestBody List<ScenarioQueueT> list){ return new Result(iscenarioQueueTService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/scenarioQueueT/delete")
+public Result<Integer> deleteScenarioQueueT(@RequestBody Long id){ return new Result(iscenarioQueueTService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/deleteBatch")
+public Result<Integer> deleteScenarioQueueTBatch(@RequestBody List<Long> list){ return new Result(iscenarioQueueTService.deleteBatch(list)); }
+@ApiOperation(notes = "取消任务", value = "取消任务")
+@GetMapping("/cancelJob")
+public Result<Integer> cancelJob(@RequestParam("id") Long id){
+return new Result(iscenarioQueueTService.cancelJob(id));
+}
+@ApiOperation(notes = "获取任务进度", value = "获取任务进度")
+@GetMapping("/findJobProgress")
+public Result<String> findJobProgress(@RequestParam Long id){
+try{
+return new Result(iscenarioQueueTService.findJobProgress(id));
+}catch (NullPointerException e){
+return new Result(new ProgressVo());
+}
+}
+@ApiOperation(notes = "根据方案id查询任务列表", value = "根据方案id查询任务列表")
+@PostMapping("/findQueueByScenarioId")
+public Result<Page<ScenarioQueueT>> findQueueByScenarioId(@RequestBody PageReqBody<Long> pageReqBody){
+return new Result<>(iscenarioQueueTService.findQueueByScenarioId(pageReqBody));
+}
+@ApiOperation(notes = "查看节点状态", value = "查看节点状态")
+@GetMapping("/findNodeState")
+public Result<List<JobExecutorInfoVo>> findNodeState(){
+return new Result(xxlJobService.findExecutorInfo());
+}
+//endregion
+}
+package com.hj2.forecast.controller;
+import com.hs.forecast.client.entity.dto.ForecastAnalyseT;
+import com.hs.forecast.client.entity.vo.ForecastSaveUserAnalysisTableRequestVo;
+import com.hs.forecast.client.entity.vo.ForecastUserAnalysisTableRequestVo;
+import com.hs.forecast.service.IForecastAnalyseTService;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import com.hs.common.core.util.Result;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ * 模拟对比-用户分析表-主表 前端控制器
+ * </p>
+ *
+ * @author lfy
+ * @since 2023-02-02
+ */
+@RestController
+@Api(tags = "ForecastAnalyseTController")
+@RequestMapping("/api/forecastAnalyseT")
+public class ForecastAnalyseTController {
+//region
+@Autowired
+private IForecastAnalyseTService iforecastAnalyseTService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/forecastAnalyseT/findAll")
+public Result<List<ForecastAnalyseT>> findAllForecastAnalyseT(){ return new Result(iforecastAnalyseTService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/forecastAnalyseT/findById/{id}")
+public Result<ForecastAnalyseT> findForecastAnalyseTById(@PathVariable Long id){ return new Result(iforecastAnalyseTService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/forecastAnalyseT/findByIds")
+public Result<Collection<ForecastAnalyseT>> findForecastAnalyseTByIds(@RequestParam("ids") List<Long> list){ return new Result(iforecastAnalyseTService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/forecastAnalyseT/add")
+public Result<Integer> addForecastAnalyseT(@RequestBody ForecastAnalyseT entity){ return new Result(iforecastAnalyseTService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/forecastAnalyseT/addBatch")
+public Result<Integer> addForecastAnalyseTBatch(@RequestBody List<ForecastAnalyseT> list){ return new Result(iforecastAnalyseTService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/forecastAnalyseT/update")
+public Result<Integer> updateForecastAnalyseT(@RequestBody ForecastAnalyseT entity){ return new Result(iforecastAnalyseTService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/forecastAnalyseT/updateBatch")
+public Result<Integer> updateForecastAnalyseTBatch(@RequestBody List<ForecastAnalyseT> list){ return new Result(iforecastAnalyseTService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/forecastAnalyseT/delete")
+public Result<Integer> deleteForecastAnalyseT(@RequestBody Long id){ return new Result(iforecastAnalyseTService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/forecastAnalyseT/deleteBatch")
+public Result<Integer> deleteForecastAnalyseTBatch(@RequestBody List<Long> list){ return new Result(iforecastAnalyseTService.deleteBatch(list)); }
+@ApiOperation(notes = "模拟对比-分析表查询", value = "模拟对比-分析表查询")
+@GetMapping("/getForecastAnalyseTable")
+public Result<List<ForecastUserAnalysisTableRequestVo>> getForecastAnalyseTable(@RequestParam("userCode") String userCode) {
+return new Result(iforecastAnalyseTService.getForecastAnalyseTable(userCode));
+}
+@ApiOperation(notes = "模拟对比-分析表保存", value = "模拟对比-分析表保存")
+@PostMapping("/saveForecastAnalyseTable")
+public Result<Boolean> saveForecastAnalyseTable(@RequestBody ForecastSaveUserAnalysisTableRequestVo requestVo) {
+return new Result<>(iforecastAnalyseTService.saveForecastAnalyseTable(requestVo));
+}
+//endregion
+}
+package com.hj2.modeldriver;
+import com.xxl.job.core.executor.impl.XxlJobSpringExecutor;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+/**
+ * <p>
+ *XXL-JOB 注册配置
+ * </p>
+ * @author : ldd
+ * @since : 2022-01-17
+ */
+@Configuration
+public class XxlJobConfiguration {
+private Logger logger = LoggerFactory.getLogger(XxlJobConfiguration.class);
+@Value("${xxl.job.admin.addresses:}")
+private String adminAddresses;
+@Value("${xxl.job.accessToken:}")
+private String accessToken;
+@Value("${xxl.job.executor.appname:}")
+private String appname;
+@Value("${xxl.job.executor.address:}")
+private String address;
+@Value("${xxl.job.executor.ip:}")
+private String ip;
+@Value("${xxl.job.executor.port:}")
+private Integer port;
+@Value("${xxl.job.executor.logpath:}")
+private String logPath;
+@Value("${xxl.job.executor.logretentiondays: 10}")
+private int logRetentionDays;
+@Bean
+public XxlJobSpringExecutor xxlJobExecutor() {
+logger.info(">>>>>>>>>>> xxl-job config init.");
+XxlJobSpringExecutor xxlJobSpringExecutor = new XxlJobSpringExecutor();
+xxlJobSpringExecutor.setAdminAddresses(adminAddresses);
+xxlJobSpringExecutor.setAppname(appname);
+xxlJobSpringExecutor.setAddress(address);
+xxlJobSpringExecutor.setIp(ip);
+xxlJobSpringExecutor.setPort(port);
+xxlJobSpringExecutor.setAccessToken(accessToken);
+xxlJobSpringExecutor.setLogPath(logPath);
+xxlJobSpringExecutor.setLogRetentionDays(logRetentionDays);
+return xxlJobSpringExecutor;
+}
+/**
+* 针对多网卡、容器内部署等情况，可借助 "spring-cloud-commons" 提供的 "InetUtils" 组件灵活定制注册IP；
+*
+*1、引入依赖：
+*<dependency>
+*<groupId>org.springframework.cloud</groupId>
+*<artifactId>spring-cloud-commons</artifactId>
+*<version>${version}</version>
+*</dependency>
+*
+*2、配置文件，或者容器启动变量
+*spring.cloud.inetutils.preferred-networks: 'xxx.xxx.xxx.'
+*
+*3、获取IP
+*String ip_ = inetUtils.findFirstNonLoopbackHostInfo().getIpAddress();
+*/
+}
+package com.hj2.forecast.controller;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import com.hs.forecast.client.entity.dto.LinkProfileConfig;
+import com.hs.forecast.service.ILinkProfileInfoService;
+import com.hs.common.core.util.Result;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ *前端控制器
+ * </p>
+ *
+ * @author qih
+ * @since 2022-08-22
+ */
+@RestController
+@Api(tags = "LinkProfile")
+public class LinkProfileInfoController {
+//region
+@Autowired
+private ILinkProfileInfoService ilinkProfileInfoService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/linkProfileInfo/findAll")
+public Result<List<LinkProfileConfig>> findAllLinkProfileInfo(){ return new Result(ilinkProfileInfoService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/linkProfileInfo/findById/{id}")
+public Result<LinkProfileConfig> findLinkProfileInfoById(@PathVariable Long id){ return new Result(ilinkProfileInfoService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/linkProfileInfo/findByIds")
+public Result<Collection<LinkProfileConfig>> findLinkProfileInfoByIds(@RequestParam("ids") List<Long> list){ return new Result(ilinkProfileInfoService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/linkProfileInfo/add")
+public Result<Integer> addLinkProfileInfo(@RequestBody LinkProfileConfig entity){ return new Result(ilinkProfileInfoService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/linkProfileInfo/addBatch")
+public Result<Integer> addLinkProfileInfoBatch(@RequestBody List<LinkProfileConfig> list){ return new Result(ilinkProfileInfoService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/linkProfileInfo/update")
+public Result<Integer> updateLinkProfileInfo(@RequestBody LinkProfileConfig entity){ return new Result(ilinkProfileInfoService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/linkProfileInfo/updateBatch")
+public Result<Integer> updateLinkProfileInfoBatch(@RequestBody List<LinkProfileConfig> list){ return new Result(ilinkProfileInfoService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/linkProfileInfo/delete")
+public Result<Integer> deleteLinkProfileInfo(@RequestBody Long id){ return new Result(ilinkProfileInfoService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/linkProfileInfo/deleteBatch")
+public Result<Integer> deleteLinkProfileInfoBatch(@RequestBody List<Long> list){ return new Result(ilinkProfileInfoService.deleteBatch(list)); }
+//endregion
+@ApiOperation(notes = "添加管网沿程link配置信息", value = "添加管网沿程link配置信息")
+@GetMapping("/linkProfileInfo/addLinkProfile")
+public Result<Boolean> addLinkProfile(@RequestParam String inpPath){
+return new Result(ilinkProfileInfoService.addLinkProfile(inpPath));
+}
+@ApiOperation(notes = "添加河网link配置信息", value = "添加河网link配置信息")
+@GetMapping("/linkProfileInfo/addRiverLinkProfile")
+public Result<Boolean> addRiverLinkProfile(@RequestParam String inpPath){
+return new Result(ilinkProfileInfoService.addRiverLinkProfile(inpPath));
+}
+}
+package com.hj2.forecast.controller;
+import cn.hutool.core.date.DateUtil;
+import com.component.scenario.entity.dto.Scenario;
+import com.hs.common.core.enums.ReturnCode;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.bo.CacheResultFileHandlerBo;
+import com.hs.forecast.client.entity.bo.ScenarioSimulationStorageRequestBo;
+import com.hs.forecast.resulthandler.service.CacheResultFilesLocally;
+import com.hs.forecast.resulthandler.util.ResultUtil;
+import com.hs.forecast.service.IOnlineModelService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiModelProperty;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import javax.annotation.Resource;
+import java.time.Duration;
+import java.time.LocalDateTime;
+/**
+ * 在线预警
+ *
+ * @author yanglei
+ * @date 2022/2/22 14:49
+ */
+@RestController
+@Api(tags = "OnlineModel")
+@RequestMapping("/api/onlineModel")
+public class OnlineModelController {
+@Resource
+private IOnlineModelService iOnlineModelService;
+@Resource
+private CacheResultFilesLocally cacheResultFilesLocally;
+@Resource
+private ResultUtil resultUtil;
+@ApiOperation(notes = "获取最新模拟方案", value = "获取最新模拟方案")
+@GetMapping("/getLatestScenarioId")
+public Result<Scenario> getLatestScenarioId() {
+return new Result<>(iOnlineModelService.getLatestScenarioId());
+}
+@ApiOperation(notes = "获取最新河道模拟方案", value = "获取最新河道模拟方案")
+@GetMapping("/getLatestRiverScenarioId")
+public Result<Scenario> getLatestRiverScenarioId(@RequestParam("scenarioType") String scenarioType) {
+return new Result<>(iOnlineModelService.getLatestRiverScenarioId(scenarioType));
+}
+@ApiModelProperty("结果入库")
+@PostMapping("/exportResultToDB")
+public Result<Boolean> exportResultToDB(@RequestBody ScenarioSimulationStorageRequestBo requestBo) {
+return new Result<>(resultUtil.onlineResultStorage(requestBo));
+}
+@ApiModelProperty("根据结果文件生成json到本地")
+@PostMapping("/createJsonFileByOutFile")
+public Result<String> handler(@RequestBody CacheResultFileHandlerBo bo) {
+cacheResultFilesLocally.handler(bo);
+return new Result<>(ReturnCode.SUCCESS.msg());
+}
+}
+package com.hj2.forecast.controller;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.bo.LinkProfileSettingAndInfoResponse;
+import com.hs.forecast.service.ILinkProfileSettingService;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+/**
+ * @author qinyue
+ * @create 2023-04-18 10:52:00
+ */
+@RestController
+@RequestMapping("/LinkProfileSetting")
+public class LinkProfileSettingController {
+@Autowired
+private ILinkProfileSettingService linkProfileSettingService;
+@GetMapping("/getProfileSettingAndInfoByScenarioIdAndIdentity")
+@ApiOperation(notes = "根据scenarioId和identity查询管道数据", value = "根据scenarioId和identity查询管道数据")
+public Result<LinkProfileSettingAndInfoResponse> getProfileSettingAndInfoList(Long scenarioId, String identify) {
+return new Result<>(linkProfileSettingService.getProfileSettingAndInfoList(scenarioId, identify));
+}
+}
+package com.hj2.forecast.controller;
+import com.hj2.monitoring.client.bo.KeyPointInfoResponseBo;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.bo.CurveLineRequestBo;
+import com.hs.forecast.client.entity.bo.CurveLineResponseBo;
+import com.hs.forecast.client.entity.dto.KeyPoint;
+import com.hs.forecast.service.IKeyPointService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.web.bind.annotation.*;
+import javax.annotation.Resource;
+import java.util.ArrayList;
+import java.util.Comparator;
+import java.util.List;
+import java.util.stream.Collectors;
+@RestController
+@Api(tags = "KeyPoint")
+@RequestMapping("/api/keyPoint")
+public class KeyPointController {
+@Resource
+private IKeyPointService keyPointService;
+@ApiOperation(notes = "根据站点编码查询对应配置警戒线", value = "根据站点编码查询对应配置警戒线")
+@PostMapping("/getCurveByStationCode")
+public Result<List<CurveLineResponseBo>> getCurveByStationCode(@RequestBody CurveLineRequestBo bo) {
+return new Result<>(keyPointService.getCurveByStationCode(bo));
+}
+/**
+* 预测预警页-河道水质预警-获取下拉列表
+* @return com.hs.common.core.util.Result<java.util.List<com.hs.forecast.client.entity.dto.KeyPoint>>
+* @author yanglei
+* @date 2022/12/5 19:07
+*/
+@ApiOperation(notes = "预测预警页-河道水质预警-获取下拉列表", value = "预测预警页-河道水质预警-获取下拉列表")
+@GetMapping("/getKeyPointInfo")
+public Result<List<KeyPointInfoResponseBo>> getKeyPointInfo() {
+List<KeyPoint> data = keyPointService.findByType("RIVER");
+List<KeyPointInfoResponseBo> keyPointInfoResponseBos = new ArrayList<>();
+for (KeyPoint datum : data) {
+KeyPointInfoResponseBo responseBo = new KeyPointInfoResponseBo();
+responseBo.setStationCode(datum.getStationId());
+responseBo.setStationName(datum.getPointName());
+keyPointInfoResponseBos.add(responseBo);
+}
+keyPointInfoResponseBos = keyPointInfoResponseBos.stream().sorted(Comparator.comparing(KeyPointInfoResponseBo::getStationCode)).collect(Collectors.toList());
+return new Result<>(keyPointInfoResponseBos);
+}
+}
+package com.hj2.forecast.controller;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.bo.ForecastModelKDResponseBo;
+import com.hs.forecast.client.entity.dto.ForecastModelRunLog;
+import com.hs.forecast.service.IForecastModelRunLogService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.format.annotation.DateTimeFormat;
+import org.springframework.web.bind.annotation.*;
+import javax.annotation.Resource;
+import java.util.Collection;
+import java.util.Date;
+import java.util.List;
+/**
+ * <p>
+ * 模拟对比-用户分析表-主表 前端控制器
+ * </p>
+ *
+ * @author lfy
+ * @since 2023-02-02
+ */
+@RestController
+@Api(tags = "ForecastModelRunLogController")
+@RequestMapping("/api/forecastModelRunLog")
+public class ForecastModelRunLogController {
+//region
+@Resource
+private IForecastModelRunLogService iForecastModelRunLogService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/findAll")
+public Result<List<ForecastModelRunLog>> findAllForecastModelRunLog(){ return new Result(iForecastModelRunLogService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/findById/{id}")
+public Result<ForecastModelRunLog> findForecastModelRunLogById(@PathVariable Long id){ return new Result(iForecastModelRunLogService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/findByIds")
+public Result<Collection<ForecastModelRunLog>> findForecastModelRunLogByIds(@RequestParam("ids") List<Long> list){ return new Result(iForecastModelRunLogService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/add")
+public Result<Integer> addForecastModelRunLog(@RequestBody ForecastModelRunLog entity){ return new Result(iForecastModelRunLogService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/ForecastModelRunLog/addBatch")
+public Result<Integer> addForecastModelRunLogBatch(@RequestBody List<ForecastModelRunLog> list){ return new Result(iForecastModelRunLogService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/update")
+public Result<Integer> updateForecastModelRunLog(@RequestBody ForecastModelRunLog entity){ return new Result(iForecastModelRunLogService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/updateBatch")
+public Result<Integer> updateForecastModelRunLogBatch(@RequestBody List<ForecastModelRunLog> list){ return new Result(iForecastModelRunLogService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/delete")
+public Result<Integer> deleteForecastModelRunLog(@RequestBody Long id){ return new Result(iForecastModelRunLogService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/deleteBatch")
+public Result<Integer> deleteForecastModelRunLogBatch(@RequestBody List<Long> list){ return new Result(iForecastModelRunLogService.deleteBatch(list)); }
+@ApiOperation(notes = "获取模型运行指标", value = "获取模型运行指标")
+@GetMapping("/getModelKD")
+public Result<ForecastModelKDResponseBo> getModelKD() {
+return new Result<>(iForecastModelRunLogService.getModelKD());
+}
+@ApiOperation(notes = "根据时间段获取模型运行记录", value = "根据时间段获取模型运行记录")
+@GetMapping("/getModelRunLogsByTime")
+public Result<List<ForecastModelRunLog>> getModelRunLogsByTime(@RequestParam @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date startTime,
+@RequestParam @DateTimeFormat(pattern = "yyyy-MM-dd HH:mm:ss") Date endTime) {
+return new Result<>(iForecastModelRunLogService.getModelRunLogsByTime(startTime, endTime));
+}
+//endregion
+}
+package com.hj2.forecast.controller;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.entity.dto.OutputData;
+import com.hs.forecast.service.IOutputDataService;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ * TRIAL 结果文件controller
+ * </p>
+ *
+ * @author qih
+ * @since 2022-02-23
+ */
+@RestController
+@Api(tags = "OutputData")
+@RequestMapping("/api/outputData")
+public class OutputDataController {
+//region
+@Autowired
+private IOutputDataService ioutputDataService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/outputData/findAll")
+public Result<List<OutputData>> findAllOutputData() {
+return new Result<>(ioutputDataService.findAll());
+}
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/outputData/findById/{id}")
+public Result<OutputData> findOutputDataById(@PathVariable Long id) {
+return new Result<>(ioutputDataService.findById(id));
+}
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/outputData/findByIds")
+public Result<Collection<OutputData>> findOutputDataByIds(@RequestParam("ids") List<Long> list) {
+return new Result<>(ioutputDataService.findByIds(list));
+}
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/outputData/add")
+public Result<Integer> addOutputData(@RequestBody OutputData entity) {
+return new Result<>(ioutputDataService.add(entity));
+}
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/outputData/addBatch")
+public Result<Integer> addOutputDataBatch(@RequestBody List<OutputData> list) {
+return new Result<>(ioutputDataService.addBatch(list));
+}
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/outputData/update")
+public Result<Integer> updateOutputData(@RequestBody OutputData entity) {
+return new Result<>(ioutputDataService.update(entity));
+}
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/outputData/updateBatch")
+public Result<Integer> updateOutputDataBatch(@RequestBody List<OutputData> list) {
+return new Result<>(ioutputDataService.updateBatch(list));
+}
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/outputData/delete")
+public Result<Integer> deleteOutputData(@RequestBody Long id) {
+return new Result<>(ioutputDataService.delete(id));
+}
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/outputData/deleteBatch")
+public Result<Integer> deleteOutputDataBatch(@RequestBody List<Long> list) {
+return new Result<>(ioutputDataService.deleteBatch(list));
+}
+//endregion
+}
+package com.hj2.forecast.controller;
+import com.hs.forecast.client.entity.dto.ForecastAnalyseTreeNodeT;
+import com.hs.forecast.service.IForecastAnalyseTreeNodeTService;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.web.bind.annotation.*;
+import com.hs.common.core.util.Result;
+import io.swagger.annotations.Api;
+import io.swagger.annotations.ApiOperation;
+import org.springframework.web.bind.annotation.RestController;
+import java.util.Collection;
+import java.util.List;
+/**
+ * <p>
+ * 模拟对比-分析表-树形节点 前端控制器
+ * </p>
+ *
+ * @author lfy
+ * @since 2023-02-02
+ */
+@RestController
+@Api(tags = "ForecastAnalyseTreeNodeTController")
+@RequestMapping("/api/forecastAnalyseTreeNodeT")
+public class ForecastAnalyseTreeNodeTController {
+//region
+@Autowired
+private IForecastAnalyseTreeNodeTService iforecastAnalyseTreeNodeTService;
+@ApiOperation(notes = "查询所有", value = "查询所有")
+@GetMapping("/forecastAnalyseTreeNodeT/findAll")
+public Result<List<ForecastAnalyseTreeNodeT>> findAllForecastAnalyseTreeNodeT(){ return new Result(iforecastAnalyseTreeNodeTService.findAll()); }
+@ApiOperation(notes = "根据Id查询", value = "根据Id查询")
+@GetMapping("/forecastAnalyseTreeNodeT/findById/{id}")
+public Result<ForecastAnalyseTreeNodeT> findForecastAnalyseTreeNodeTById(@PathVariable Long id){ return new Result(iforecastAnalyseTreeNodeTService.findById(id)); }
+@ApiOperation(notes = "根据Ids查询", value = "根据Ids查询")
+@GetMapping("/forecastAnalyseTreeNodeT/findByIds")
+public Result<Collection<ForecastAnalyseTreeNodeT>> findForecastAnalyseTreeNodeTByIds(@RequestParam("ids") List<Long> list){ return new Result(iforecastAnalyseTreeNodeTService.findByIds(list)); }
+@ApiOperation(notes = "添加单条数据", value = "添加单条数据")
+@PostMapping("/forecastAnalyseTreeNodeT/add")
+public Result<Integer> addForecastAnalyseTreeNodeT(@RequestBody ForecastAnalyseTreeNodeT entity){ return new Result(iforecastAnalyseTreeNodeTService.add(entity)); }
+@ApiOperation(notes = "批量添加数据", value = "批量添加数据")
+@PostMapping("/forecastAnalyseTreeNodeT/addBatch")
+public Result<Integer> addForecastAnalyseTreeNodeTBatch(@RequestBody List<ForecastAnalyseTreeNodeT> list){ return new Result(iforecastAnalyseTreeNodeTService.addBatch(list)); }
+@ApiOperation(notes = "修改单条数据", value = "修改单条数据")
+@PutMapping("/forecastAnalyseTreeNodeT/update")
+public Result<Integer> updateForecastAnalyseTreeNodeT(@RequestBody ForecastAnalyseTreeNodeT entity){ return new Result(iforecastAnalyseTreeNodeTService.update(entity)); }
+@ApiOperation(notes = "批量修改数据", value = "批量修改数据")
+@PutMapping("/forecastAnalyseTreeNodeT/updateBatch")
+public Result<Integer> updateForecastAnalyseTreeNodeTBatch(@RequestBody List<ForecastAnalyseTreeNodeT> list){ return new Result(iforecastAnalyseTreeNodeTService.updateBatch(list)); }
+@ApiOperation(notes = "删除单条数据", value = "删除单条数据")
+@DeleteMapping("/forecastAnalyseTreeNodeT/delete")
+public Result<Integer> deleteForecastAnalyseTreeNodeT(@RequestBody Long id){ return new Result(iforecastAnalyseTreeNodeTService.delete(id)); }
+@ApiOperation(notes = "批量删除数据", value = "批量删除数据")
+@DeleteMapping("/forecastAnalyseTreeNodeT/deleteBatch")
+public Result<Integer> deleteForecastAnalyseTreeNodeTBatch(@RequestBody List<Long> list){ return new Result(iforecastAnalyseTreeNodeTService.deleteBatch(list)); }
+//endregion
+}
+package com.hj2.forecast.controller;
+import com.component.scenario.entity.dto.Scenario;
+import com.hj2.monitoring.client.bo.ThirdRiverWaterQualityEarlyWarningResponseBo;
+import com.hj2.monitoring.client.vo.RainForecastVo;
+import com.hs.common.core.enums.ReturnCode;
+import com.hs.common.core.util.Result;
+import com.hs.forecast.client.api.MonitoringApi;
+import com.hs.forecast.client.entity.bo.*;
+import com.hs.forecast.client.entity.dto.KeyPoint;
+import com.hs.forecast.client.entity.dto.TreeDataListRequestDto;
+import com.hs.forecast.client.entity.vo.ModelInfoVo;
+import com.hs.forecast.client.entity.vo.RegulateEquipmentVo;
+import com.hs.forecast.service.GeneralService;
+import com.hs.forecast.service.IKeyPointService;
+import com.hs.forecast.service.IOnlineModelService;
+import com.hs.forecast.service.IScenarioSimulationService;
+import com.hs.model.swmm.bean.Conduit;
+import com.hs.model.swmm.bean.TSPairObject;
+import io.swagger.annotations.*;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.web.bind.annotation.*;
+import javax.annotation.Resource;
+import javax.validation.Valid;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+@Slf4j
+@RestController
+@Api(tags = "ScenarioSimulation")
+@RequestMapping("/api/scenarioSimulation")
+public class ScenarioSimulationController {
+@Resource
+private IScenarioSimulationService iScenarioSimulationService;
+@Resource
+private IKeyPointService iKeyPointService;
+@Resource
+private GeneralService generalService;
+@Autowired
+private RedisTemplate redisTemplate;
+@Autowired
+private MonitoringApi monitoringApi;
+@Autowired
+private IOnlineModelService iOnlineModelService;
+private static final String keyPointKey = "getDataList";
+@ApiOperation(notes = "获取模型结果文件中指定结果项的结果", value = "获取模型结果文件中指定结果项的结果")
+@PostMapping("/getResultItemData")
+public Result<List<TSPairObject>> getResultItemData(@RequestBody ResultItemDataRequestBo requestBo) {
+return new Result(iScenarioSimulationService.getResultItemData(requestBo));
+}
+//2.根据scenarioID获取结果Legend GetScenarioLegend 参数scenarioId、dataType (获取&编辑)
+// TODO: 2022/2/23 后续根据方案id获取图例文件路径，读取文件中图例信息
+@ApiOperation(notes = "根据scenarioID获取结果Legend(图例)", value = "根据scenarioID获取结果Legend(图例)")
+@PostMapping("/getScenarioLegend")
+public Result<ResultTypeLegend> getScenarioLegend(@RequestBody ResultItemDataRequestBo requestBo) {
+return new Result(iScenarioSimulationService.getScenarioLegend(requestBo));
+}
+@ApiOperation(notes = "根据scenarioID编辑图例", value = "根据scenarioID编辑图例")
+@GetMapping("/setScenarioLegend")
+public Result<List<TSPairObject>> setScenarioLegend(Scenario scenario) {
+return new Result(iScenarioSimulationService.setScenarioLegend(scenario));
+}
+@ApiOperation(notes = "根据scenario获取要素信息", value = "根据scenario获取要素信息")
+@PostMapping("/getScenarioDynamicObjList")
+public Result<List<ResultType>> getScenarioDynamicObjList(@RequestBody DynamicScenarioBo bo) {
+return new Result<>(iScenarioSimulationService.getScenarioDynamicObjList(bo));
+}
+@ApiOperation(notes = "根据节点获取管道线路", value = "根据节点获取管道")
+@PostMapping("/getPipeRoutes")
+public Result<List<Conduit>> getPipeRoutes(@RequestBody PipeRoutesBo bo) {
+return new Result<>(iScenarioSimulationService.getPipeRoutes(bo));
+}
+@ApiOperation(notes = "根据管道查询剖面图数据", value = "根据管道查询剖面图数据")
+@PostMapping("/getPipeProfileDatas")
+public Result<LinkProfileResultBo> getPipeProfileDatas(@RequestBody PipeProFilesDataBo bo) {
+return new Result<>(iScenarioSimulationService.getPipeProfileDatas(bo));
+}
+@ApiOperation(notes = "获取模型步长、时间", value = "获取模型使步长、时间")
+@GetMapping("/getModelTimeInfo")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<ModelInfoVo> getModelTimeInfo(Long scenarioId) {
+return new Result<>(iScenarioSimulationService.getModelTimeInfo(scenarioId));
+}
+//@ApiOperation(notes = "获取模型计算相关信息", value = "获取模型计算相关信息")
+//@GetMapping("/geScenarioModelConfigInfo")
+//@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+//public Result<RollModelConfig> geScenarioModelConfigInfo(Long scenarioId) {
+//return new Result<>(iScenarioSimulationService.geScenarioModelConfigInfo(scenarioId));
+//}
+@ApiOperation(notes = "修改模型步长、时间", value = "修改模型使步长、时间")
+@PostMapping("/updateModelTimeInfo")
+public Result<Boolean> updateModelTimeInfo(@Valid @RequestBody ModelInfoVo vo) {
+return new Result<>(iScenarioSimulationService.updateModelTimeInfo(vo));
+}
+@ApiOperation(notes = "获取所有时间序列名称以及数据", value = "获取所有时间序列名称以及数据")
+@GetMapping("/getAllBndTSData")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<Map<String, List<TSPairObject>>> getAllBndTSData(Long scenarioId) {
+return new Result<>(iScenarioSimulationService.getAllBndTSData(scenarioId));
+}
+@ApiOperation(notes = "根据时间序列名获取时间序列数据", value = "根据时间序列名获取时间序列数据")
+@PostMapping("/getTimeSeriesDatasByName")
+public Result<List<TSPairObject>> getTimeSeriesDatasByName(@Valid @RequestBody ModelInfoVo vo) {
+return new Result<>(iScenarioSimulationService.getTimeSeriesDatasByName(vo));
+}
+@ApiOperation(notes = "根据时间序列名更新时间序列数据", value = "根据时间序列名更新时间序列数据")
+@PostMapping("/updateTimeSeriesDatas")
+public Result<Boolean> updateTimeSeriesDatas(@Valid @RequestBody ModelInfoVo vo) {
+return new Result<>(iScenarioSimulationService.updateTimeSeriesDatas(vo));
+}
+@ApiOperation(notes = "根据方案id和标识查询对应剖面图数据", value = "根据方案id和表示查询对应剖面图数据")
+@GetMapping("/getPipeDataByScenarioIdAndIdentify")
+@ApiImplicitParams({
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "String", required = true),
+@ApiImplicitParam(name = "identify", value = "标识", dataType = "String", required = true),
+})
+public Result<LinkProfileResultBo> getPipeDataByScenarioIdAndIdentify(@RequestParam("scenarioId") Long scenarioId,
+@RequestParam("identify") String identify) {
+return new Result<>(iScenarioSimulationService.getPipeDataByScenarioIdAndIdentify(scenarioId, identify));
+}
+@ApiOperation(notes = "获取未来2小时调蓄设备运行情况", value = "获取未来2小时调蓄设备运行情况")
+@GetMapping("/queryRegulateEquipment")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<List<RegulateEquipmentVo>> queryRegulateEquipment(@RequestParam("scenarioId")Long scenarioId) {
+return new Result<>(iScenarioSimulationService.queryRegulateEquipment(scenarioId));
+}
+@ApiOperation(notes = "获取模型重要点位", value = "获取模型重要点位")
+@GetMapping("/getKeyPointInfo")
+@ApiImplicitParam(name = "elementType", value = "要素类型", dataType = "string", required = true,defaultValue = "NODE")
+public Result<List<KeyPoint>> getKeyPointInfo(@RequestParam("elementType") String elementType) {
+return new Result<>(iKeyPointService.findByType(elementType));
+}
+@ApiOperation(notes = "获取管网、河网模型步长、模拟时长", value = "获取管网、河网模型步长、模拟时长")
+@GetMapping("/getModelTimeData")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<ModelInfoVo> getModelTimeData(Long scenarioId) {
+return new Result<>(iScenarioSimulationService.getModelTimeData(scenarioId));
+}
+@ApiOperation(notes = "添加历史预警预案", value = "添加历史预警预案")
+@PostMapping("/createHistoryScenarioByGroup")
+@ApiImplicitParams({
+@ApiImplicitParam(name = "id", value = "id", dataType = "String", required = true),
+@ApiImplicitParam(name = "groupId", value = "组id", dataType = "String", required = true),
+})
+public Result<Scenario> createHistoryScenarioByGroup(HistoryGroupScenarioBo bo) {
+return new Result(generalService.createHistoryScenarioByGroup(bo));
+}
+@ApiOperation(notes = "查询模型预报降雨数据", value = "查询模型预报降雨数据")
+@GetMapping("/findModelForecastRainFall")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<List<RainForecastVo>> findModelForecastRainFall(Long scenarioId) {
+return new Result(generalService.findModelForecastRainFall(scenarioId));
+}
+@ApiOperation(notes = "预测预警页-溢流预警+黄孝河钢坝闸+机场河西渠（东渠与西渠）钢坝闸", value = "预测预警页-溢流预警+黄孝河钢坝闸+机场河西渠（东渠与西渠）钢坝闸")
+@GetMapping("/getEarlyWarningData")
+public Result<EarlyWarningResponse> getEarlyWarningData() {
+return new Result(iScenarioSimulationService.getEarlyWarningData());
+}
+/**
+* 水安全页-河道行洪安全-剖面图数据
+* @param identify 河道标识名称 黄孝河明渠、机场河东渠、机场河西渠
+* @return com.hs.forecast.client.entity.bo.RiverLinkAlongWaterLevelDataResponseBo
+* @author yanglei
+* @date 2022/11/24 13:57
+*/
+@ApiOperation(notes = "水安全页-河道行洪安全-剖面图数据", value = "水安全页-河道行洪安全-剖面图数据")
+@GetMapping("/getRiverLinkAlongWaterLevelData")
+@ApiImplicitParam(name = "identify", value = "河道标识(hxh_river-黄孝河明渠、jchd_river-机场河东渠()、jchx_river-机场河西渠)", dataType = "string", required = true)
+public Result<RiverLinkAlongWaterLevelDataResponseBo> getRiverLinkAlongWaterLevelData(@RequestParam(name = "identify") String identify) {
+return new Result<>(iScenarioSimulationService.getRiverLinkAlongWaterLevelData(identify));
+}
+/**
+* 预测预警页-河道水质预警-未来3天COD模拟曲线
+* @param stationCode 站点编码例：HJ-WS010301-QT0007(机场河西渠上游监测站)
+* @return com.hs.common.core.util.Result<java.util.List<com.hs.model.swmm.bean.TSPairObject>>
+* @author yanglei
+* @date 2022/12/5 13:55
+*/
+@ApiOperation(notes = "预测预警页-河道水质预警-未来3天COD模拟曲线", value = "预测预警页-河道水质预警-未来3天COD模拟曲线")
+@GetMapping("/getRiverForecastByStationCode")
+@ApiImplicitParam(name = "stationCode", value = "站点编码例：HJ-WS010301-QT0007(机场河西渠上游监测站)", dataType = "string", required = true)
+public Result<List<TSPairObject>> getRiverForecastByStationCode(@RequestParam(name = "stationCode") String stationCode) {
+return new Result<>(iScenarioSimulationService.getRiverForecastByStationCode(stationCode));
+}
+@ApiOperation(notes = "预警预测-水质达标数据", value = "预警预测-水质达标数据")
+@GetMapping("/getWaterQualityAssess")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<ThirdRiverWaterQualityEarlyWarningResponseBo> getWaterQualityAssess(@RequestParam("scenarioId") Long scenarioId) {
+return new Result<>(iScenarioSimulationService.getWaterQualityAssess(scenarioId));
+}
+@ApiOperation(notes = "预测预警页-河道水质预警", value = "预测预警页-河道水质预警")
+@GetMapping("/getRiverWaterQualityEarlyWarning")
+public Result<ThirdRiverWaterQualityEarlyWarningResponseBo> getRiverWaterQualityEarlyWarning() {
+Scenario river = iOnlineModelService.getLatestRiverScenarioId("RiverWQ");
+return new Result<>(iScenarioSimulationService.getWaterQualityAssess(river.getId()));
+}
+@ApiOperation(notes = "获取实时数据和模拟数据", value = "获取实时数据和模拟数据")
+@GetMapping("/getDataList")
+@ApiImplicitParam(name = "scenarioId", value = "方案id", dataType = "string", required = true)
+public Result<Map> getDataList(@ApiParam(name = "scenarioId", value = "方案id",required = true)
+@RequestParam(value = "scenarioId", required = true) Long scenarioId,
+@ApiParam(name = "stationCode", value = "站点编码",required = true)
+@RequestParam(value = "stationCode", required = true) String stationCode,
+@ApiParam(name = "factorEn", value = "因子编码",required = true)
+@RequestParam(value = "factorEn", required = true) String factorEn) {
+Map dataMap = iScenarioSimulationService.getDataList(scenarioId, stationCode, factorEn);
+return new Result(dataMap);
+}
+@ApiOperation(notes = "预测预警右侧模型预报降雨", value = "预测预警右侧模型预报降雨")
+@GetMapping("/findForecastModelRain")
+@ApiImplicitParams({
+@ApiImplicitParam(name = "scenarioId", value = "方案ID", paramType = "query", required = true),
+@ApiImplicitParam(name = "name", value = "时间序列名 默认JFGY_1", paramType = "query", required = true)
+})
+public Result<RainForecastVo> findForecastModelRain(@RequestParam Long scenarioId, String name) {
+if (Objects.isNull(scenarioId) || Objects.isNull(name) ) {
+return new Result<>(ReturnCode.PARAMETER_ERROR_EXCEPTION);
+}
+return new Result(iScenarioSimulationService.findForecastModelRain(scenarioId,name));
+}
+@ApiOperation(notes = "模型结果chart数据接口", value = "模型结果chart数据接口")
+@PostMapping("/getTreeDataList")
+public Result<List<Map<String, Object>>> getTreeDataList(@RequestBody TreeDataListRequestDto treeDataListRequestDto) {
+return new Result(iScenarioSimulationService.getTreeDataList(treeDataListRequestDto));
+}
+}
