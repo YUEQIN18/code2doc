@@ -1,6 +1,6 @@
 # AI生成接口文档
 
-> 通过阅读代码，自动生成文档，支持c++，java，javascript等多种语言
+> 通过阅读代码，自动生成文档，支持java, c++
 
 ## 使用方法
 
@@ -14,5 +14,3 @@
     ```
 2. 将源代码下载到 `code` 文件夹中
 3. 运行 `main.py` 等待文档编写完成
-
-https://github.com/YUEQIN18/code2doc
